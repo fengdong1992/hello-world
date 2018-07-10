@@ -1,0 +1,201 @@
+package main
+
+import (
+        "database/sql"
+        "fmt"
+        "github.com/PuerkitoBio/goquery"
+        _ "github.com/go-sql-driver/mysql"
+        "net/http"
+        "strconv"
+        "strings"
+        "time"
+)
+
+func scrapecoin() {
+        url := "https://www.aicoin.net.cn/currencies"
+        UserAgent := "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/67.0.3396.62 Safari/537.37"
+        client := &http.Client{
+                Timeout: time.Duration(time.Second * 10),
+        }
+
+        req, err := http.NewRequest("GET", url, nil)
+
+        req.Header.Add("User-Agent", UserAgent)
+
+        if err != nil {
+                panic(err)
+        }
+
+        res, _ := client.Do(req)
+        defer res.Body.Close()
+        doc, err := goquery.NewDocumentFromReader(res.Body)
+        if err != nil {
+                fmt.Println(err)
+        }
+        db, err := sql.Open("mysql", "root:123456@tcp(127.0.0.1:3306)/coin")
+        if err != nil {
+                fmt.Println(err)
+        }
+        timestamp := time.Now().Format("2006-01-02 15:04:05")
+        var haha []string
+
+        doc.Find("tbody.value-body").Find("tr").Each(func(i int, s *goquery.Selection) {
+                haha = append(haha, s.Find("td.coin_name").Text())
+
+                s.Find("td>span").Each(func(i int, t *goquery.Selection) {
+                        //fmt.Println(t.Text())
+                        haha = append(haha, string(t.Text()))
+                })
+
+                if len(haha) == 10 {
+                        var TV float64
+                        if haha[6] == "万" {
+                                aa, _ := strconv.ParseFloat(strings.Replace(haha[5], ",", "", -1), 32)
+                                TV = aa * 10000
+                        } else {
+                                bb, _ := strconv.ParseFloat(strings.Replace(haha[5], ",", "", -1), 32)
+                                TV = bb * 100000000
+                        }
+
+                        _, err = db.Exec("INSERT INTO t_coin_detail (CN,GI,24G,24T,24V,QoC,DS)values(?,?,?,?,?,?,?)", haha[0], haha[3], haha[4], int(TV), haha[7]+haha[8], haha[9], timestamp)
+                        if err != nil {
+                                fmt.Println(err, haha[0])
+                        }
+                }
+
+                haha = []string{}
+
+        })
+
+}
+
+func sbtv() {
+        db, err := sql.Open("mysql", "root:123456@tcp(127.0.0.1:3306)/coin")
+        if err != nil {
+                fmt.Println(err)
+        }
+
+        rows, err := db.Query("select * from t_coin_detail where DS=(select max(DS) from t_coin_detail) order by 24T desc limit 20")
+
+        if err != nil {
+                fmt.Println(err)
+        }
+
+        for rows.Next() {
+                columns, _ := rows.Columns()
+
+                scanArgs := make([]interface{}, len(columns))
+                values := make([]interface{}, len(columns))
+
+                for i := range values {
+                        scanArgs[i] = &values[i]
+                }
+
+                //将数据保存到 record 字典
+                err = rows.Scan(scanArgs...)
+                record := make(map[string]string)
+                for i, col := range values {
+                        if col != nil {
+                                record[columns[i]] = string(col.([]byte))
+                        }
+                }
+                message := record["CN"] + "\n" + "币价：" + record["GI"] + "\n" + "24h波动：" + record["24G"] + "\n" + "24h交易额：" + record["24T"] + "\n" + "24h交易量：" + record["24V"] + "\n" + "流通数量：" + record["QoC"] + "\n" + "时间：" + record["DS"] + "\n"
+                fmt.Println(message)
+        }
+        rows.Close()
+}
+
+func hrfluct() {
+
+        db, err := sql.Open("mysql", "root:123456@tcp(127.0.0.1:3306)/coin")
+        if err != nil {
+                fmt.Println(err)
+        }
+
+        rows, err := db.Query("select * from t_coin_detail where DS>=(select max(DS) from t_coin_detail where DS < (select max(DS) from t_coin_detail)) order by CN")
+
+        if err != nil {
+                fmt.Println(err)
+        }
+
+        record := make(map[string][]string)
+
+        for rows.Next() {
+                columns, _ := rows.Columns()
+
+                scanArgs := make([]interface{}, len(columns))
+                values := make([]interface{}, len(columns))
+
+                for i := range values {
+                        scanArgs[i] = &values[i]
+                }
+
+                //将数据保存到 record 字典
+                err = rows.Scan(scanArgs...)
+                content := []string{}
+                for _, col := range values {
+                        if col != nil {
+                                content = append(content, string(col.([]byte)))
+                        }
+
+                }
+                if _, ok := record[content[1]]; ok {
+                        currdata, _ := strconv.ParseFloat(record[content[1]][2], 64)
+                        predata, _ := strconv.ParseFloat(content[4], 64)
+                        fluct := ((predata - currdata) / predata) * 100
+                        //fmt.Println(content[1], currdata, predata, fluct)
+                        GG, _ := strconv.Atoi(record[content[1]][2])
+                        _, err = db.Exec("INSERT INTO t_coin_fluct (CN,GI,24G,24T,24F,24V,QoC,DS)values(?,?,?,?,?,?,?,?)", content[1], record[content[1]][0], record[content[1]][1], GG, fluct, record[content[1]][3], record[content[1]][4], record[content[1]][5])
+                        if err != nil {
+                                fmt.Println(err)
+                        }
+                } else {
+                        record[content[1]] = content[2:]
+                        //fmt.Println(record[content[1]])
+                }
+        }
+        rows.Close()
+}
+
+func flucttv() {
+        db, err := sql.Open("mysql", "root:123456@tcp(127.0.0.1:3306)/coin")
+        if err != nil {
+                fmt.Println(err)
+        }
+
+        rows, err := db.Query("select * from t_coin_fluct where 24T>300000 and DS=(select max(DS) from t_coin_fluct) order by ABS(24F) desc limit 20")
+
+        if err != nil {
+                fmt.Println(err)
+        }
+
+        for rows.Next() {
+                columns, _ := rows.Columns()
+
+                scanArgs := make([]interface{}, len(columns))
+                values := make([]interface{}, len(columns))
+
+                for i := range values {
+                        scanArgs[i] = &values[i]
+                }
+
+                //将数据保存到 record 字典
+                err = rows.Scan(scanArgs...)
+                record := make(map[string]string)
+                for i, col := range values {
+                        if col != nil {
+                                record[columns[i]] = string(col.([]byte))
+                        }
+                }
+                message := record["CN"] + "\n" + "币价：" + record["GI"] + "\n" + "24h波动：" + record["24G"] + "\n" + "24h交易额：" + record["24T"] + "\n" + "2H交易额波动:" + record["24F"] + "%" + " \n" + "24h交易量：" + record["24V"] + "\n" + "流通数量：" + record["QoC"] + "\n" + "时间：" + record["DS"] + "\n"
+                fmt.Println(message)
+        }
+        rows.Close()
+}
+
+func main() {
+        scrapecoin()
+        //sbtv()
+        hrfluct()
+        flucttv()
+}
